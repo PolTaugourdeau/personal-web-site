@@ -85,7 +85,7 @@ function Login({ onLogin }) {
           </button>
 
           <div className="login-hint">
-            <b>Demo</b> — usuario: <b>poltaug</b> · contraseña: <b>poltaug</b>
+            {/* Demo - usuario: poltaug / contraseña: poltaug */}
           </div>
 
           <div className="login-footer">© 2026 · Personal Workspace</div>
