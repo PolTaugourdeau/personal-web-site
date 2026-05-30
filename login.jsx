@@ -7,7 +7,7 @@ function Login({ onLogin }) {
   const [loading, setLoading] = React.useState(false);
 
   const VALID_USER = "poltaug";
-  const VALID_PASS = "poltaug";
+  const VALID_PASS = "Familia123";
 
   function submit(e) {
     e && e.preventDefault();
