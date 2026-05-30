@@ -61,7 +61,6 @@ function Login({ onLogin }) {
               autoComplete="username"
               value={user}
               onChange={(e) => setUser(e.target.value)}
-              placeholder="poltaug"
               autoFocus
             />
           </div>
