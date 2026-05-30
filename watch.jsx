@@ -124,14 +124,134 @@ function WatchCard({ item }) {
 // ─── Reproductor ─────────────────────────────────────────────────────
 const PLAYER_EXAMPLE = "https://www.playimdb.com/es-es/title/tt0120915/";
 
+function WatchPoster({ keyId, cls }) {
+  const res = window.usePoster ? window.usePoster(keyId) : ["", () => {}];
+  const src = Array.isArray(res) ? res[0] : res;
+  const onFail = Array.isArray(res) ? res[1] : () => {};
+  if (!src) return null;
+  return <img className={cls} src={src} alt="" onError={onFail}/>;
+}
+
 function WatchNowPage({ request }) {
   const [link, setLink] = React.useState("");
   const [playing, setPlaying] = React.useState("");   // url cargada en el iframe
   const [title, setTitle] = React.useState("");
   const [imdbUrl, setImdbUrl] = React.useState("");
   const [resolving, setResolving] = React.useState(false);
+  const [ctxMenu, setCtxMenu] = React.useState(null);  // { x, y, item } | null
+  const [toast, setToast] = React.useState("");
+  const [history, setHistory] = React.useState(() => {
+    try { const s = localStorage.getItem("pw_history"); if (s) return JSON.parse(s); } catch {}
+    return [];
+  });
+  const [histSort, setHistSort] = React.useState("all"); // all | movie | series
+  const [confirmClear, setConfirmClear] = React.useState(false);
   const inputRef = React.useRef(null);
   const playerRef = React.useRef(null);
+
+  React.useEffect(() => {
+    try { localStorage.setItem("pw_history", JSON.stringify(history)); } catch {}
+  }, [history]);
+
+  // corrige tipos de entradas antiguas (p.ej. series guardadas como peli)
+  React.useEffect(() => {
+    setHistory(prev => {
+      let changed = false;
+      const next = prev.map(h => {
+        const dt = detectType(h.title, h.type);
+        if (dt !== h.type) { changed = true; return { ...h, type: dt }; }
+        return h;
+      });
+      return changed ? next : prev;
+    });
+  }, []);
+
+  // detección de tipo: corrige series/anime conocidas mal etiquetadas
+  const KNOWN_SERIES = ["the walking dead","breaking bad","game of thrones","stranger things","the last of us","house of the dragon","succession","severance","peaky blinders","dark","the mandalorian","fallout","the boys","wednesday","loki","the bear","reacher","yellowjackets","euphoria","narcos","the crown","better call saul","ozark","money heist","la casa de papel","squid game","the witcher","arcane","invincible","rick and morty","friends","the office","lost","westworld","true detective","fargo","mr robot","chernobyl","the white lotus","andor","silo","shogun"];
+  const KNOWN_ANIME = ["one piece","naruto","attack on titan","jujutsu kaisen","demon slayer","chainsaw man","spy x family","frieren","solo leveling","death note","vinland saga","dragon ball","bleach","hunter x hunter","my hero academia","tokyo revengers","hell mode","prison school","shangri-la frontier"];
+  function detectType(title, fallback) {
+    const t = (title || "").toLowerCase();
+    if (KNOWN_ANIME.some(s => t.includes(s))) return "anime";
+    if (KNOWN_SERIES.some(s => t.includes(s))) return "series";
+    return fallback || "movie";
+  }
+
+  function recordHistory(url, meta = {}) {
+    const idm = (url || "").match(/tt\d+/i);
+    const key = idm ? idm[0].toLowerCase() : (url || "").trim();
+    if (!key) return;
+    setHistory(prev => {
+      const existing = prev.find(h => h.key === key);
+      const ttl = meta.title || (existing && existing.title) || "Enlace directo";
+      const entry = {
+        key,
+        title: ttl,
+        type: detectType(ttl, meta.type || (existing && existing.type) || "movie"),
+        year: meta.year || (existing && existing.year) || "",
+        url,
+        episode: existing ? existing.episode : "",
+        ts: Date.now(),
+      };
+      return [entry, ...prev.filter(h => h.key !== key)].slice(0, 40);
+    });
+  }
+  function setSeason(key, val) {
+    setHistory(prev => prev.map(h => h.key === key ? { ...h, season: Math.max(1, val) } : h));
+  }
+  function setEp(key, val) {
+    setHistory(prev => prev.map(h => h.key === key ? { ...h, ep: Math.max(1, val) } : h));
+  }
+  function removeHistory(key) {
+    setHistory(prev => prev.filter(h => h.key !== key));
+  }
+  function renameHistory(key, title) {
+    setHistory(prev => prev.map(h => h.key === key ? { ...h, title } : h));
+  }
+  function startPlay(url, meta) {
+    if (!url) return;
+    setLink(url);
+    setPlaying(url);
+    if (meta && meta.title) setTitle(meta.title);
+    recordHistory(url, meta || {});
+  }
+
+  React.useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    return () => { window.removeEventListener("click", close); window.removeEventListener("scroll", close, true); };
+  }, [ctxMenu]);
+
+  function saveToCine(it) {
+    try {
+      const raw = localStorage.getItem("pw_cine");
+      const list = raw ? JSON.parse(raw) : [];
+      if (list.some(x => x.title.toLowerCase() === it.title.toLowerCase() && x.year === it.year)) {
+        setToast(`"${it.title}" ya está en Cine`);
+      } else {
+        const entry = {
+          id: "c" + Date.now(),
+          title: it.title,
+          year: it.year,
+          type: it.type,
+          genre: it.genre,
+          platform: (it.on && it.on[0]) || "google",
+          url: `https://www.imdb.com/es-es/title/${it.imdb}/`,
+          poster: "",
+          status: "toWatch",
+          fav: false,
+          rating: 0,
+        };
+        localStorage.setItem("pw_cine", JSON.stringify([entry, ...list]));
+        setToast(`Guardado en Cine: "${it.title}"`);
+      }
+    } catch (e) {
+      setToast("No se pudo guardar");
+    }
+    setCtxMenu(null);
+    setTimeout(() => setToast(""), 2600);
+  }
 
   // petición de reproducción desde otra sección (ej. Cine → Ver)
   React.useEffect(() => {
@@ -150,14 +270,14 @@ function WatchNowPage({ request }) {
     setPlaying(url);
     setImdbUrl((it.url || "").trim());
     setTitle(it.title || "");
+    recordHistory(url, { title: it.title, type: it.type, year: it.year });
   }, [request && request.ts]);
 
   function playFromImdb() {
     const m = imdbUrl.match(/(tt\d+)/i);
     if (!m) return;
     const url = /imdb\.com/i.test(imdbUrl) ? imdbUrl.replace(/imdb\.com/i, "playimdb.com") : `https://www.playimdb.com/es-es/title/${m[1]}/`;
-    setLink(url);
-    setPlaying(url);
+    startPlay(url, { type: /\/tv|series/i.test(imdbUrl) ? "series" : "movie" });
   }
 
   function goFullscreen() {
@@ -174,8 +294,8 @@ function WatchNowPage({ request }) {
       if (s) {
         const o = JSON.parse(s);
         setLink(o.link || "");
-        setPlaying(o.playing || "");
         setTitle(o.title || "");
+        // no auto-reproducir: el usuario debe pulsar Reproducir
       }
     } catch {}
   }, []);
@@ -205,8 +325,7 @@ function WatchNowPage({ request }) {
   function play(u) {
     const url = normalize(u ?? link);
     if (!url) return;
-    setLink(url);
-    setPlaying(url);
+    startPlay(url, {});
   }
   function clear() {
     setPlaying(""); setTitle("");
@@ -221,8 +340,32 @@ function WatchNowPage({ request }) {
         </div>
       </div>
 
+      {/* Marcadores de plataformas */}
+      <div className="card" style={{ marginTop: "var(--gap)" }}>
+        <div className="card-head">
+          <div className="card-title"><span className="dot"/> Plataformas</div>
+        </div>
+        <div className="watch-fallback" style={{ justifyContent: "flex-start", maxWidth: "none" }}>
+          {WATCH_PLATFORMS.map(pid => {
+            const p = WATCH_PF_MAP[pid];
+            return (
+              <a
+                key={pid}
+                className="watch-fb-btn"
+                href={PLATFORM_HOME[pid]}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <span className="wfb-glyph" style={{ background: p.color }}>{p.glyph}</span>
+                {p.name}
+              </a>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Buscador de título → slide de resultados */}
-      <div className="watch-hero">
+      <div className="watch-hero" style={{ marginTop: "var(--gap)" }}>
         <div className="watch-imdb-search">
           <IconSearch size={16}/>
           <input
@@ -255,11 +398,13 @@ function WatchNowPage({ request }) {
                   <button
                     key={i}
                     className="watch-slide-card"
-                    onClick={() => { setLink(embedFor(it)); setPlaying(embedFor(it)); }}
-                    title={`Reproducir ${it.title}`}
+                    onClick={() => startPlay(embedFor(it), { title: it.title, type: it.type, year: it.year })}
+                    onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, item: it }); }}
+                    title={`Reproducir ${it.title} · clic derecho para guardar en Cine`}
                   >
                     <div className="wsc-poster" style={posterStyle(it)}>
                       <span className="wsc-type">{it.type === "movie" ? "Peli" : it.type === "series" ? "Serie" : "Anime"}</span>
+                      <WatchPoster cls="wsc-img" keyId={it.imdb || it.title}/>
                       <span className="wsc-mark">{posterInitials(it.title)}</span>
                       <span className="wsc-play"><IconPlay size={18}/></span>
                     </div>
@@ -286,26 +431,6 @@ function WatchNowPage({ request }) {
           {imdbUrl && <button className="watch-clear" onClick={() => setImdbUrl("")} title="Borrar"><IconClose size={14}/></button>}
           <button className="watch-play-btn" onClick={playFromImdb} disabled={!imdbUrl.trim()}>
             <IconPlay size={13}/> Reproducir
-          </button>
-        </div>
-        <div className="watch-searchbar">
-          <IconPlay size={18}/>
-          <input
-            ref={inputRef}
-            value={link}
-            onChange={(e) => setLink(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") play(); }}
-            placeholder="Pega el enlace embed. Ej. https://streamimdb.ru/embed/movie/tt0120915"
-          />
-          {link && <button className="watch-clear" onClick={() => setLink("")} title="Borrar"><IconClose size={14}/></button>}
-          <button className="watch-play-btn" onClick={() => play()} disabled={!link.trim()}>
-            <IconPlay size={13}/> Reproducir
-          </button>
-        </div>
-        <div className="watch-hint-row">
-          <span>¿No tienes enlace?</span>
-          <button className="watch-example" onClick={() => { setLink(PLAYER_EXAMPLE); play(PLAYER_EXAMPLE); }}>
-            Probar con un ejemplo
           </button>
         </div>
       </div>
@@ -348,29 +473,127 @@ function WatchNowPage({ request }) {
         )}
       </div>
 
-      {/* Marcadores de plataformas */}
-      <div className="card" style={{ marginTop: "var(--gap)" }}>
-        <div className="card-head">
-          <div className="card-title"><span className="dot"/> Plataformas</div>
+      {/* Barra de enlace embed — debajo del reproductor */}
+      <div className="watch-hero" style={{ marginTop: "var(--gap)" }}>
+        <div className="watch-searchbar">
+          <IconPlay size={18}/>
+          <input
+            ref={inputRef}
+            value={link}
+            onChange={(e) => setLink(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") play(); }}
+            placeholder="Pega el enlace embed. Ej. https://streamimdb.ru/embed/movie/tt0120915"
+          />
+          {link && <button className="watch-clear" onClick={() => setLink("")} title="Borrar"><IconClose size={14}/></button>}
+          <button className="watch-play-btn" onClick={() => play()} disabled={!link.trim()}>
+            <IconPlay size={13}/> Reproducir
+          </button>
         </div>
-        <div className="watch-fallback" style={{ justifyContent: "flex-start", maxWidth: "none" }}>
-          {WATCH_PLATFORMS.map(pid => {
-            const p = WATCH_PF_MAP[pid];
-            return (
-              <a
-                key={pid}
-                className="watch-fb-btn"
-                href={PLATFORM_HOME[pid]}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <span className="wfb-glyph" style={{ background: p.color }}>{p.glyph}</span>
-                {p.name}
-              </a>
-            );
-          })}
+        <div className="watch-hint-row">
+          <span>¿No tienes enlace?</span>
+          <button className="watch-example" onClick={() => { setLink(PLAYER_EXAMPLE); play(PLAYER_EXAMPLE); }}>
+            Probar con un ejemplo
+          </button>
         </div>
       </div>
+
+      {/* Historial de reproducción — dos filas: pelis y series */}
+      {history.length > 0 && (() => {
+        const movies = history.filter(h => h.type === "movie");
+        const series = history.filter(h => h.type === "series" || h.type === "anime");
+        const Tile = (h) => {
+          const isSerie = h.type === "series" || h.type === "anime";
+          return (
+            <div key={h.key} className="hist-tile-wrap">
+              <div
+                className="hist-tile"
+                onClick={() => startPlay(h.url, { title: h.title, type: h.type, year: h.year })}
+                title={`Reanudar ${h.title}`}
+              >
+                <div className="hist-tile-poster" style={posterStyle({ title: h.title, type: h.type })}>
+                  <WatchPoster cls="hist-tile-img" keyId={/^tt\d+/i.test(h.key) ? h.key : h.title}/>
+                  <span className="hist-tile-mark">{posterInitials(h.title)}</span>
+                  <span className={`tile-type type-${h.type}`}>{h.type === "movie" ? "Peli" : h.type === "series" ? "Serie" : "Anime"}</span>
+                  <button className="hist-tile-x" onClick={(e) => { e.stopPropagation(); removeHistory(h.key); }} title="Quitar"><IconClose size={11}/></button>
+                  <div className="hist-tile-hover">
+                    <span className="tile-play-ic"><IconPlay size={16}/></span>
+                    <span className="hist-tile-title">{h.title}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="hist-tile-foot">
+                <input
+                  className="hist-tile-name"
+                  value={h.title}
+                  onChange={(e) => renameHistory(h.key, e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  spellCheck={false}
+                  title="Editar nombre"
+                />
+                {isSerie && (
+                  <div className="hist-ep">
+                    <div className="hist-stepper">
+                      <span className="hist-step-label">T</span>
+                      <button onClick={() => setSeason(h.key, (h.season || 1) - 1)} disabled={(h.season || 1) <= 1}>−</button>
+                      <span className="hist-step-val mono">{h.season || 1}</span>
+                      <button onClick={() => setSeason(h.key, (h.season || 1) + 1)}>+</button>
+                    </div>
+                    <div className="hist-stepper">
+                      <span className="hist-step-label">E</span>
+                      <button onClick={() => setEp(h.key, (h.ep || 1) - 1)} disabled={(h.ep || 1) <= 1}>−</button>
+                      <span className="hist-step-val mono">{h.ep || 1}</span>
+                      <button onClick={() => setEp(h.key, (h.ep || 1) + 1)}>+</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        };
+        return (
+          <div className="card" style={{ marginTop: "var(--gap)" }}>
+            <div className="card-head">
+              <div className="card-title"><span className="dot"/> Historial <span className="cine-count">{history.length}</span></div>
+              <button
+                className={`btn ${confirmClear ? "solid" : ""}`}
+                onClick={() => {
+                  if (confirmClear) { setHistory([]); setConfirmClear(false); }
+                  else { setConfirmClear(true); setTimeout(() => setConfirmClear(false), 3500); }
+                }}
+              >{confirmClear ? "¿Seguro? Vaciar" : "Vaciar"}</button>
+            </div>
+
+            <div className="hist-section-label">Películas <span className="cine-count">{movies.length}</span></div>
+            {movies.length === 0
+              ? <div className="hist-empty-row">Nada todavía.</div>
+              : <div className="hist-rail">{movies.map(Tile)}</div>}
+
+            <div className="hist-section-label" style={{ marginTop: 16 }}>Series y anime <span className="cine-count">{series.length}</span></div>
+            {series.length === 0
+              ? <div className="hist-empty-row">Nada todavía.</div>
+              : <div className="hist-rail">{series.map(Tile)}</div>}
+          </div>
+        );
+      })()}
+
+      {ctxMenu && (
+        <div
+          className="watch-ctx"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <div className="watch-ctx-title">{ctxMenu.item.title}</div>
+          <button className="watch-ctx-item" onClick={() => saveToCine(ctxMenu.item)}>
+            <IconPlus size={12}/> Guardar en Cine
+          </button>
+          <button className="watch-ctx-item" onClick={() => { const it = ctxMenu.item; startPlay(embedFor(it), { title: it.title, type: it.type, year: it.year }); setCtxMenu(null); }}>
+            <IconPlay size={12}/> Reproducir
+          </button>
+        </div>
+      )}
+
+      {toast && <div className="watch-toast">{toast}</div>}
     </>
   );
 }

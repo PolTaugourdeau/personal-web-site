@@ -940,8 +940,6 @@ function PersonalPage({ username }) {
 
       <div style={{ marginBottom: "var(--gap)" }}><Clock/></div>
 
-      <UpcomingStrip events={events} />
-
       <div className="grid grid-personal">
         <div className="col-12"><Calendar events={events} addEvent={addEvent} deleteEvent={deleteEvent}/></div>
         <div className="col-12"><Notes/></div>

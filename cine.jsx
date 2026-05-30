@@ -13,6 +13,45 @@ const PLATFORMS = [
 ];
 const PLATFORM_MAP = Object.fromEntries(PLATFORMS.map(p => [p.id, p]));
 
+// ─── OMDb: portadas e info reales por título / id de IMDb ────────────
+const OMDB_KEY = "d487aefc";
+const _posterCache = (() => { try { return JSON.parse(localStorage.getItem("pw_poster_cache") || "{}"); } catch { return {}; } })();
+async function omdbFetch(params) {
+  try {
+    const r = await fetch(`https://www.omdbapi.com/?apikey=${OMDB_KEY}&${params}`);
+    const d = await r.json();
+    return d && d.Response !== "False" ? d : null;
+  } catch { return null; }
+}
+async function fetchPoster(key) {
+  if (!key) return "";
+  if (_posterCache[key] !== undefined) return _posterCache[key];
+  const isId = /^tt\d+/i.test(key);
+  const d = await omdbFetch(isId ? `i=${key}` : `t=${encodeURIComponent(key)}`);
+  const p = d && d.Poster && d.Poster !== "N/A" ? d.Poster : "";
+  _posterCache[key] = p;
+  try { localStorage.setItem("pw_poster_cache", JSON.stringify(_posterCache)); } catch {}
+  return p;
+}
+function imdbIdOf(item) {
+  const m = (item && item.url || "").match(/tt\d+/i);
+  return m ? m[0] : "";
+}
+function usePoster(key, existing) {
+  const [src, setSrc] = React.useState(existing || (key && _posterCache[key]) || "");
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => {
+    // si no hay imagen útil (o la guardada falló), pide a OMDb
+    if (existing && !failed) { setSrc(existing); return; }
+    if (!key) return;
+    if (_posterCache[key]) { setSrc(_posterCache[key]); return; }
+    let on = true;
+    fetchPoster(key).then(p => { if (on && p) setSrc(p); });
+    return () => { on = false; };
+  }, [key, existing, failed]);
+  return [src, () => setFailed(true)];
+}
+
 const TYPES = [
   { id: "movie",  label: "Películas" },
   { id: "series", label: "Series" },
@@ -162,6 +201,7 @@ function PlatformStrip() {
 
 // ─── Poster card (favoritas) ─────────────────────────────────────────
 function PosterCard({ item, onToggleFav, onToggleStatus, onRate, onDelete, onEdit, onWatch }) {
+  const [poster, onPosterFail] = usePoster(imdbIdOf(item) || item.title, item.poster);
   return (
     <div className="poster-card" style={posterStyle(item)}>
       <div className="poster-top">
@@ -175,7 +215,7 @@ function PosterCard({ item, onToggleFav, onToggleStatus, onRate, onDelete, onEdi
         >★</button>
       </div>
       <div className="poster-mark">
-        {item.poster && <img className="poster-img" src={item.poster} alt="" onError={(e) => { e.target.style.display = "none"; }}/>}
+        {poster && <img className="poster-img" src={poster} alt="" onError={onPosterFail}/>}
         {posterInitials(item.title)}
       </div>
       <div className="poster-bottom">
@@ -241,10 +281,10 @@ function CineRow({ item, onToggleFav, onToggleStatus, onRate, onDelete, onEdit, 
       </td>
       <td className="c-actions">
         <button className="action-btn ver-btn" onClick={() => onWatch && onWatch(item)} title="Ver ahora">
-          <IconPlay size={12}/> Ver
+          Play
         </button>
-        <button className="action-btn" onClick={() => onEdit(item.id)} title="Editar"><IconEdit size={11}/></button>
-        <button className="action-btn danger" onClick={() => onDelete(item.id)} title="Eliminar"><IconTrash size={11}/></button>
+        <button className="action-btn edit-btn" onClick={() => onEdit(item.id)} title="Editar"><IconEdit size={12}/></button>
+        <button className="action-btn danger" onClick={() => onDelete(item.id)} title="Eliminar"><IconTrash size={12}/></button>
       </td>
     </tr>
   );
@@ -281,12 +321,11 @@ function CineModal({ item, onSave, onClose }) {
   }
 
   return (
-    <div className="bm-modal-bg cine-modal-bg" onClick={onClose}>
-      <div className="bm-modal cine-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="bm-modal-head">
-          <h3>{isEdit ? "Editar" : "Añadir"}</h3>
-          <button className="icon-btn" onClick={onClose} title="Cerrar"><IconClose/></button>
-        </div>
+    <div className="cine-modal-pop" onClick={(e) => e.stopPropagation()}>
+      <div className="bm-modal-head">
+        <h3>{isEdit ? "Editar" : "Añadir"}</h3>
+        <button className="icon-btn" onClick={onClose} title="Cerrar"><IconClose/></button>
+      </div>
         <div className="bm-modal-body">
           <label>
             <span>Título</span>
@@ -377,12 +416,62 @@ function CineModal({ item, onSave, onClose }) {
             {isEdit ? "Guardar" : "Añadir"}
           </button>
         </div>
+    </div>
+  );
+}
+
+// ─── Tile (Netflix-style) ────────────────────────────────────────────
+function TileCard({ item, onWatch, onCtx, onDelete }) {
+  const isSerie = item.type === "series" || item.type === "anime";
+  const [poster, onPosterFail] = usePoster(imdbIdOf(item) || item.title, item.poster);
+  return (
+    <div
+      className="tile-card"
+      onClick={() => onWatch && onWatch(item)}
+      onContextMenu={onCtx}
+      title={`${item.title} · clic para reproducir · clic derecho para opciones`}
+    >
+      <div className="tile-poster" style={posterStyle(item)}>
+        {poster && <img className="tile-img" src={poster} alt="" onError={onPosterFail}/>}
+        <span className="tile-mark">{posterInitials(item.title)}</span>
+        <span className={`tile-type type-${item.type}`}>{item.type === "movie" ? "Peli" : item.type === "series" ? "Serie" : "Anime"}</span>
+        <button className="tile-x" onClick={(e) => { e.stopPropagation(); onDelete && onDelete(item.id); }} title="Eliminar"><IconClose size={12}/></button>
+        {item.fav && <span className="tile-fav">★</span>}
+        {item.status === "watched" && <span className="tile-watched">✓ Vista</span>}
+        <div className="tile-hover">
+          <div className="tile-hover-top">
+            <span className="tile-play-ic"><IconPlay size={18}/></span>
+            <span className="tile-hover-title">{item.title}</span>
+          </div>
+          <div className="tile-hover-meta">
+            <span className="mono">{item.year}</span>
+            {item.rating > 0 && <span className="tile-stars">{"★".repeat(item.rating)}</span>}
+          </div>
+          <div className="tile-hover-genre">{item.genre}</div>
+        </div>
       </div>
     </div>
   );
 }
 
 // ─── Página principal ────────────────────────────────────────────────
+function CineSuggestCard({ s, onPick }) {
+  const [poster] = usePoster(s.t);
+  return (
+    <button
+      className="cine-sg-card"
+      onMouseDown={(e) => { e.preventDefault(); onPick(); }}
+    >
+      <div className="cine-sg-poster" style={posterStyle({ title: s.t, type: s.k })}>
+        {poster && <img src={poster} alt="" onError={(e) => { e.target.style.display = "none"; }}/>}
+        <span className="cine-sg-mark">{posterInitials(s.t)}</span>
+      </div>
+      <div className="cine-sg-title">{s.t}</div>
+      <div className="cine-sg-year mono">{s.y}</div>
+    </button>
+  );
+}
+
 function CinePage({ onWatch }) {
   const [items, setItems] = React.useState(() => {
     try {
@@ -400,17 +489,48 @@ function CinePage({ onWatch }) {
   const [showSuggest, setShowSuggest] = React.useState(false);
   const [enriching, setEnriching] = React.useState(false);
   const [editing, setEditing] = React.useState(null);      // item or null
+  const [tileCtx, setTileCtx] = React.useState(null);      // { x, y, item }
+
+  React.useEffect(() => {
+    if (!tileCtx) return;
+    const close = () => setTileCtx(null);
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    return () => { window.removeEventListener("click", close); window.removeEventListener("scroll", close, true); };
+  }, [tileCtx]);
 
   async function addWithLookup(forced) {
     const q = (typeof forced === "string" ? forced : addQuery).trim();
     if (!q || enriching) return;
     setEnriching(true);
     let draft = { title: q };
+
+    // 1) OMDb — fuente fiable de info + portada real de IMDb
+    try {
+      const d = await omdbFetch(`t=${encodeURIComponent(q)}`);
+      if (d) {
+        const isAnime = /animation/i.test(d.Genre || "") && /japan/i.test((d.Country || "") + (d.Language || ""));
+        draft = {
+          title: d.Title || q,
+          type: isAnime ? "anime" : (d.Type === "series" ? "series" : "movie"),
+          year: parseInt(d.Year) || new Date().getFullYear(),
+          genre: (d.Genre || "").split(", ").join(" · "),
+          platform: "google",
+          url: d.imdbID ? `https://www.imdb.com/es-es/title/${d.imdbID}/` : "",
+          poster: d.Poster && d.Poster !== "N/A" ? d.Poster : "",
+        };
+        if (d.imdbID && draft.poster) { _posterCache[d.imdbID] = draft.poster; try { localStorage.setItem("pw_poster_cache", JSON.stringify(_posterCache)); } catch {} }
+        setEnriching(false); setAddQuery(""); setEditing(draft);
+        return;
+      }
+    } catch (e) { /* sigue al fallback */ }
+
+    // 2) Fallback IA si OMDb no encuentra nada
     try {
       if (window.claude && typeof window.claude.complete === "function") {
-        const prompt = `Eres una base de datos de cine. Para el título "${q}", devuelve SOLO un objeto JSON válido (sin texto extra, sin markdown) con esta forma exacta:
-{"title": "título oficial en español", "type": "movie|series|anime", "year": 2024, "genre": "Género1 · Género2", "platform": "netflix|prime|hbo|disney|youtube|filmin|animeyt|google", "url": "https://www.imdb.com/es-es/title/ttXXXXXXX/", "poster": "https://…/portada.jpg"}
-Usa el tipo "anime" solo si es animación japonesa. La "url" DEBE ser el enlace de la ficha de IMDb del título con su id real (formato https://www.imdb.com/es-es/title/tt seguido de números, por ejemplo Dune → https://www.imdb.com/es-es/title/tt1160419/). El "poster" debe ser la URL directa de la imagen de la portada en el CDN de IMDb (empieza por https://m.media-amazon.com/images/...). Si no la sabes con certeza, usa una de Wikimedia (upload.wikimedia.org). Haz tu mejor estimación para el resto de campos.`;
+        const prompt = `Eres una base de datos de cine experta. Para el título "${q}", devuelve SOLO un objeto JSON válido (sin texto extra, sin markdown):
+{"title": "título oficial en español", "type": "movie|series|anime", "year": 2024, "genre": "Género1 · Género2", "platform": "netflix|prime|hbo|disney|youtube|google", "imdbId": "tt1160419"}
+Respeta el año y el número de secuela en el imdbId. No dejes campos vacíos.`;
         const res = await Promise.race([
           window.claude.complete(prompt),
           new Promise((_, rj) => setTimeout(() => rj(new Error("timeout")), 12000)),
@@ -419,14 +539,17 @@ Usa el tipo "anime" solo si es animación japonesa. La "url" DEBE ser el enlace 
           const m = res.match(/\{[\s\S]*\}/);
           if (m) {
             const o = JSON.parse(m[0]);
+            const idMatch = (o.imdbId || o.url || "").match(/tt\d+/i);
+            let poster = "";
+            if (idMatch) poster = await fetchPoster(idMatch[0]);
             draft = {
               title: o.title || q,
               type: ["movie","series","anime"].includes(o.type) ? o.type : "movie",
               year: parseInt(o.year) || new Date().getFullYear(),
               genre: o.genre || "",
               platform: o.platform || "google",
-              url: o.url || "",
-              poster: o.poster || "",
+              url: idMatch ? `https://www.imdb.com/es-es/title/${idMatch[0]}/` : "",
+              poster,
             };
           }
         }
@@ -497,35 +620,37 @@ Usa el tipo "anime" solo si es animación japonesa. La "url" DEBE ser el enlace 
           <h1>Cine</h1>
           <p className="lede">Tus pelis, series y anime. Marca favoritas, valora y abre el enlace para verlas.</p>
         </div>
-        <div className="cine-head-actions">
-          <div className="cine-add-search">
-            <IconSearch size={14}/>
+      </div>
+
+      <div className="watch-hero">
+        <div className="cine-add-search watch-searchbar">
+            <IconSearch size={18}/>
             <input
               value={addQuery}
               onChange={(e) => { setAddQuery(e.target.value); setShowSuggest(true); }}
               onFocus={() => setShowSuggest(true)}
               onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
               onKeyDown={(e) => { if (e.key === "Enter") { setShowSuggest(false); addWithLookup(); } if (e.key === "Escape") setShowSuggest(false); }}
-              placeholder="Busca un título para añadir…"
+              placeholder="Busca una peli, serie o anime para añadir…"
               disabled={enriching}
             />
             {enriching && <span className="caa-loading">Buscando…</span>}
             {showSuggest && addQuery.trim() && !enriching && (() => {
               const q = addQuery.trim().toLowerCase();
-              const matches = POPULAR_SUGGEST.filter(s => s.t.toLowerCase().includes(q)).slice(0, 6);
+              const matches = POPULAR_SUGGEST.filter(s => s.t.toLowerCase().includes(q)).slice(0, 8);
               return (
                 <div className="cine-suggest">
-                  {matches.map(s => (
-                    <button
-                      key={s.t}
-                      className="cine-suggest-row"
-                      onMouseDown={(e) => { e.preventDefault(); setShowSuggest(false); addWithLookup(s.t); }}
-                    >
-                      <span className={`type-chip type-${s.k}`}>{s.k === "movie" ? "Peli" : s.k === "series" ? "Serie" : "Anime"}</span>
-                      <span className="cs-title">{s.t}</span>
-                      <span className="cs-year mono">{s.y}</span>
-                    </button>
-                  ))}
+                  {matches.length > 0 && (
+                    <div className="cine-suggest-grid">
+                      {matches.map(s => (
+                        <CineSuggestCard
+                          key={s.t}
+                          s={s}
+                          onPick={() => { setShowSuggest(false); addWithLookup(s.t); }}
+                        />
+                      ))}
+                    </div>
+                  )}
                   <button
                     className="cine-suggest-row add"
                     onMouseDown={(e) => { e.preventDefault(); setShowSuggest(false); addWithLookup(); }}
@@ -534,26 +659,21 @@ Usa el tipo "anime" solo si es animación japonesa. La "url" DEBE ser el enlace 
                     <span className="cs-title">Añadir «{addQuery.trim()}»</span>
                     <span className="cs-hint">buscar info</span>
                   </button>
-                  <a
-                    className="cine-suggest-row google"
-                    href={`https://www.google.com/search?q=${encodeURIComponent(addQuery.trim() + " película serie")}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onMouseDown={(e) => e.stopPropagation()}
-                  >
-                    <IconSearch size={12}/>
-                    <span className="cs-title">Buscar «{addQuery.trim()}» en Google</span>
-                    <span className="cs-hint">↗</span>
-                  </a>
                 </div>
               );
             })()}
+            {editing !== null && (
+              <CineModal
+                item={editing}
+                onSave={save}
+                onClose={() => setEditing(null)}
+              />
+            )}
           </div>
-        </div>
       </div>
 
       {/* Filtros y tabs */}
-      <div className="card cine-filters">
+      <div className="card cine-filters" style={{ marginTop: "var(--gap)" }}>
         <div className="cine-tabs-row">
           <div className="cine-tabs">
             <button className={`cine-tab ${type === "all" ? "on" : ""}`} onClick={() => setType("all")}>
@@ -642,48 +762,38 @@ Usa el tipo "anime" solo si es animación japonesa. La "url" DEBE ser el enlace 
               : "Todo lo que coincide con los filtros está en favoritas."}
           </div>
         ) : (
-          <div className="table-wrap">
-            <table className="table cine-table">
-              <thead>
-                <tr>
-                  <th></th>
-                  <th></th>
-                  <th>Título</th>
-                  <th>Tipo</th>
-                  <th>Valoración</th>
-                  <th>Estado</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {rest.map(it => (
-                  <CineRow
-                    key={it.id}
-                    item={it}
-                    onToggleFav={toggleFav}
-                    onToggleStatus={toggleStatus}
-                    onRate={rate}
-                    onDelete={del}
-                    onEdit={(id) => setEditing(items.find(x => x.id === id))}
-                    onWatch={onWatch}
-                  />
-                ))}
-              </tbody>
-            </table>
+          <div className="tile-grid">
+            {rest.map(it => (
+              <TileCard
+                key={it.id}
+                item={it}
+                onWatch={onWatch}
+                onDelete={del}
+                onCtx={(e) => { e.preventDefault(); setTileCtx({ x: e.clientX, y: e.clientY, item: it }); }}
+              />
+            ))}
           </div>
         )}
       </div>
 
-      {editing !== null && (
-        <CineModal
-          item={editing}
-          onSave={save}
-          onClose={() => setEditing(null)}
-        />
+      {tileCtx && (
+        <div
+          className="watch-ctx"
+          style={{ left: Math.min(tileCtx.x, window.innerWidth - 210), top: Math.min(tileCtx.y, window.innerHeight - 220) }}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <div className="watch-ctx-title">{tileCtx.item.title}</div>
+          <button className="watch-ctx-item" onClick={() => { onWatch && onWatch(tileCtx.item); setTileCtx(null); }}><IconPlay size={12}/> Play</button>
+          <button className="watch-ctx-item" onClick={() => { toggleFav(tileCtx.item.id); setTileCtx(null); }}>★ {tileCtx.item.fav ? "Quitar de favoritas" : "Favorita"}</button>
+          <button className="watch-ctx-item" onClick={() => { toggleStatus(tileCtx.item.id); setTileCtx(null); }}>✓ {tileCtx.item.status === "watched" ? "Marcar por ver" : "Marcar vista"}</button>
+          <button className="watch-ctx-item" onClick={() => { setEditing(items.find(x => x.id === tileCtx.item.id)); setTileCtx(null); }}><IconEdit size={12}/> Editar</button>
+          <button className="watch-ctx-item danger" onClick={() => { del(tileCtx.item.id); setTileCtx(null); }}><IconTrash size={12}/> Eliminar</button>
+        </div>
       )}
     </>
   );
 }
 
 window.CinePage = CinePage;
-Object.assign(window, { PLATFORM_MAP, posterStyle, posterInitials });
+Object.assign(window, { PLATFORM_MAP, posterStyle, posterInitials, fetchPoster, usePoster, OMDB_KEY, omdbFetch });
